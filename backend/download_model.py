@@ -27,7 +27,7 @@ if __name__ == "__main__":
     # Robust Video Matting (RVM) MobilNetV3 model
     # URL from official repo: https://github.com/PeterL1n/RobustVideoMatting
     model_url = "https://github.com/PeterL1n/RobustVideoMatting/releases/download/v1.0.0/rvm_mobilenetv3.pth"
-    model_dir = os.path.join(os.getcwd(), "backend", "model")
+    model_dir = os.path.join(os.path.dirname(__file__), "model")
     os.makedirs(model_dir, exist_ok=True)
     model_path = os.path.join(model_dir, "rvm_mobilenetv3.pth")
     

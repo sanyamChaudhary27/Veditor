@@ -23,25 +23,29 @@ class RVMInference:
         self.model.load_state_dict(torch.load(model_path, map_location=self.device))
         self.rec = [None] * 4 # Recurrent states
 
-    def process_frame(self, frame_bgr):
+    def process_batch(self, frames_bgr):
         """
-        Processes a single frame (BGR from OpenCV).
-        Returns: alpha, foreground
+        Processes a batch of frames (list of BGR images).
+        Returns: list of (alpha, foreground)
         """
-        # Convert BGR to RGB and normalize to [0, 1]
-        frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
-        
-        # Direct conversion to tensor is faster than PIL
-        frame_tensor = torch.from_numpy(frame_rgb).permute(2, 0, 1).float().div(255).unsqueeze(0).to(self.device)
+        if not frames_bgr:
+            return []
+
+        # Convert BGR list to a single batch tensor [B, C, H, W]
+        frames_rgb = [cv2.cvtColor(f, cv2.COLOR_BGR2RGB) for f in frames_bgr]
+        batch_tensor = torch.stack([
+            torch.from_numpy(f).permute(2, 0, 1).float().div(255) 
+            for f in frames_rgb
+        ]).to(self.device)
 
         with torch.no_grad():
-            fgr, pha, *self.rec = self.model(frame_tensor, *self.rec, downsample_ratio=0.25)
+            fgr, pha, *self.rec = self.model(batch_tensor, *self.rec, downsample_ratio=0.25)
         
-        # Efficiently move back to numpy for compositing if not using GPU for compositing
-        alpha = pha.squeeze().cpu().numpy()
-        foreground = fgr.squeeze().permute(1, 2, 0).cpu().numpy()
+        # Split batch back to list
+        alphas = pha.squeeze(1).cpu().numpy() # [B, H, W]
+        foregrounds = fgr.cpu().permute(0, 2, 3, 1).numpy() # [B, H, W, 3]
         
-        return alpha, foreground
+        return list(zip(alphas, foregrounds))
 
     def reset_states(self):
         self.rec = [None] * 4

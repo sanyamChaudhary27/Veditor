@@ -12,11 +12,73 @@ export default function Home() {
   const [backgroundColor, setBackgroundColor] = useState({ r: 0, g: 255, b: 0 });
   const [isProcessing, setIsProcessing] = useState(false);
   const [processedVideoUrl, setProcessedVideoUrl] = useState<string | null>(null);
+  const [blurRadius, setBlurRadius] = useState(0);
+  const [lightingStrength, setLightingStrength] = useState(0);
+  const [taskId, setTaskId] = useState<string | null>(null);
+  const [progress, setProgress] = useState(0);
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [isPreviewLoading, setIsPreviewLoading] = useState(false);
+
+  const handlePreview = async () => {
+    if (!videoFile) return;
+    setIsPreviewLoading(true);
+    
+    const formData = new FormData();
+    formData.append("video", videoFile);
+    if (backgroundFile) {
+      formData.append("background", backgroundFile);
+    }
+    formData.append("color_r", backgroundColor.r.toString());
+    formData.append("color_g", backgroundColor.g.toString());
+    formData.append("color_b", backgroundColor.b.toString());
+    formData.append("blur_radius", blurRadius.toString());
+    formData.append("lighting_strength", (lightingStrength / 100).toString());
+
+    try {
+      const response = await fetch("http://localhost:8000/preview", {
+        method: "POST",
+        body: formData,
+      });
+      const data = await response.json();
+      setPreviewUrl(data.preview_url);
+    } catch (error) {
+      console.error("Preview error:", error);
+    } finally {
+      setIsPreviewLoading(false);
+    }
+  };
+
+  const pollStatus = (id: string) => {
+    const interval = setInterval(async () => {
+      try {
+        const response = await fetch(`http://localhost:8000/status/${id}`);
+        if (!response.ok) return;
+        
+        const data = await response.json();
+        setProgress(data.progress);
+        
+        if (data.status === "completed") {
+          setProcessedVideoUrl(`http://localhost:8000${data.output_url}`);
+          setIsProcessing(false);
+          setTaskId(null);
+          clearInterval(interval);
+        } else if (data.status === "failed") {
+          alert(`Processing failed: ${data.error}`);
+          setIsProcessing(false);
+          setTaskId(null);
+          clearInterval(interval);
+        }
+      } catch (error) {
+        console.error("Polling error:", error);
+      }
+    }, 1000);
+  };
 
   const handleProcessVideo = async () => {
     if (!videoFile) return;
 
     setIsProcessing(true);
+    setProgress(0);
     setProcessedVideoUrl(null);
 
     const formData = new FormData();
@@ -27,6 +89,8 @@ export default function Home() {
     formData.append("color_r", backgroundColor.r.toString());
     formData.append("color_g", backgroundColor.g.toString());
     formData.append("color_b", backgroundColor.b.toString());
+    formData.append("blur_radius", blurRadius.toString());
+    formData.append("lighting_strength", (lightingStrength / 100).toString());
 
     try {
       const response = await fetch("http://localhost:8000/remove-background", {
@@ -34,14 +98,14 @@ export default function Home() {
         body: formData,
       });
 
-      if (!response.ok) throw new Error("Processing failed");
+      if (!response.ok) throw new Error("Could not start processing");
 
       const data = await response.json();
-      setProcessedVideoUrl(`http://localhost:8000${data.output_video_url}`);
+      setTaskId(data.task_id);
+      pollStatus(data.task_id);
     } catch (error) {
       console.error("Error:", error);
-      alert("An error occurred during video processing.");
-    } finally {
+      alert("An error occurred while starting the video processing.");
       setIsProcessing(false);
     }
   };
@@ -108,6 +172,47 @@ export default function Home() {
               />
             </section>
 
+            <section className="space-y-6 bg-zinc-900/50 p-6 rounded-2xl border border-zinc-800">
+              <div className="space-y-4">
+                <div className="flex justify-between items-center">
+                  <label className="text-sm font-medium text-zinc-400">Background Blur</label>
+                  <span className="text-xs font-mono text-blue-400">{blurRadius}%</span>
+                </div>
+                <input
+                  type="range"
+                  min="0"
+                  max="100"
+                  value={blurRadius}
+                  onChange={(e) => setBlurRadius(parseInt(e.target.value))}
+                  className="w-full h-1.5 bg-zinc-800 rounded-lg appearance-none cursor-pointer accent-blue-600"
+                />
+              </div>
+
+              <div className="space-y-4">
+                <div className="flex justify-between items-center">
+                  <label className="text-sm font-medium text-zinc-400">Smart Lighting Match</label>
+                  <span className="text-xs font-mono text-blue-400">{lightingStrength}%</span>
+                </div>
+                <input
+                  type="range"
+                  min="0"
+                  max="100"
+                  value={lightingStrength}
+                  onChange={(e) => setLightingStrength(parseInt(e.target.value))}
+                  className="w-full h-1.5 bg-zinc-800 rounded-lg appearance-none cursor-pointer accent-blue-600"
+                />
+              </div>
+
+              <button
+                onClick={handlePreview}
+                disabled={!videoFile || isProcessing || isPreviewLoading}
+                className="w-full py-2 bg-zinc-800 hover:bg-zinc-700 disabled:opacity-50 text-sm font-medium rounded-lg transition-colors flex items-center justify-center gap-2"
+              >
+                {isPreviewLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4 text-blue-400" />}
+                Preview Effect on Frame
+              </button>
+            </section>
+
             <button
               onClick={handleProcessVideo}
               disabled={!videoFile || isProcessing}
@@ -120,11 +225,11 @@ export default function Home() {
               {isProcessing ? (
                 <>
                   <Loader2 className="w-5 h-5 animate-spin" />
-                  Processing HD Video...
+                  Processing Video...
                 </>
               ) : (
                 <>
-                  Process Video
+                  Process Full Video
                   <ArrowRight className="w-5 h-5" />
                 </>
               )}
@@ -140,11 +245,28 @@ export default function Home() {
             
             <div className="relative">
               {isProcessing && (
-                <div className="absolute inset-0 bg-black/60 backdrop-blur-sm z-20 flex flex-col items-center justify-center rounded-xl border border-zinc-800">
-                  <Loader2 className="w-12 h-12 text-blue-500 animate-spin mb-4" />
-                  <p className="text-blue-400 font-medium animate-pulse">AI is predicting masks...</p>
+                <div className="absolute inset-0 bg-black/80 backdrop-blur-md z-20 flex flex-col items-center justify-center rounded-xl border border-zinc-800 p-8 text-center">
+                  <Loader2 className="w-12 h-12 text-blue-500 animate-spin mb-6" />
+                  <div className="w-full bg-zinc-800 h-2 rounded-full mb-4 overflow-hidden">
+                    <div 
+                      className="bg-blue-600 h-full transition-all duration-300 ease-out shadow-[0_0_12px_rgba(37,99,235,0.4)]"
+                      style={{ width: `${progress}%` }}
+                    />
+                  </div>
+                  <p className="text-xl font-bold text-white mb-2">{progress}%</p>
+                  <p className="text-blue-400 font-medium text-sm tracking-wide">AI IS PREDICTING MASKS & COMPOSITING...</p>
                 </div>
               )}
+              
+              {!isProcessing && !processedVideoUrl && previewUrl && (
+                <div className="absolute inset-0 z-10 rounded-xl overflow-hidden border border-zinc-800 bg-black">
+                  <img src={previewUrl} alt="Effect Preview" className="w-full h-full object-contain" />
+                  <div className="absolute top-2 right-2 bg-blue-600/80 text-[10px] font-bold px-2 py-1 rounded text-white uppercase tracking-widest backdrop-blur-sm">
+                    Frame Preview
+                  </div>
+                </div>
+              )}
+
               <VideoPreview
                 title="Result Preview"
                 processedVideoUrl={processedVideoUrl}
@@ -155,7 +277,7 @@ export default function Home() {
               <a
                 href={processedVideoUrl}
                 download
-                className="flex items-center justify-center gap-2 w-full py-3 bg-zinc-800 hover:bg-zinc-700 rounded-xl font-semibold transition-all"
+                className="flex items-center justify-center gap-2 w-full py-4 bg-zinc-100 hover:bg-white text-black rounded-xl font-bold transition-all shadow-xl shadow-white/5 active:scale-95"
               >
                 <Download className="w-5 h-5" />
                 Download HD Result

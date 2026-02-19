@@ -28,7 +28,13 @@ def test_endpoint():
 
     url = "http://localhost:8000/remove-background"
     files = {'video': open(video_path, 'rb')}
-    data = {'color_r': 0, 'color_g': 255, 'color_b': 0} # Green background
+    data = {
+        'color_r': 0, 
+        'color_g': 0, 
+        'color_b': 0, 
+        'blur_radius': 50, 
+        'lighting_strength': 0.8
+    } # Black background with blur and lighting match
 
     print(f"Sending request to {url}...")
     try:
