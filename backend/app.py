@@ -7,10 +7,11 @@ import uuid
 import cv2
 import base64
 from video_processor import VideoProcessor
+from datetime import datetime, timedelta
 
 app = FastAPI()
 
-# Task storage
+# Task storage with timestamps
 tasks = {}
 
 app.add_middleware(
@@ -35,10 +36,16 @@ processor = VideoProcessor(MODEL_PATH)
 async def run_processing_task(task_id, video_path, output_path, bg_path, bg_color, blur_radius, lighting_strength):
     try:
         def progress_update(current, total):
-            tasks[task_id]["progress"] = int((current / total) * 100)
+            progress = int((current / total) * 100)
+            tasks[task_id]["progress"] = progress
+            print(f"Task {task_id} - Progress: {progress}% ({current}/{total})")
         
         print(f"Starting processing for task {task_id}")
         print(f"Output path: {output_path}")
+        
+        # Initial progress update
+        tasks[task_id]["progress"] = 1
+        print(f"Task {task_id} - Initial progress set to 1%")
         
         processor.process_video(
             video_path, output_path, 
@@ -49,6 +56,7 @@ async def run_processing_task(task_id, video_path, output_path, bg_path, bg_colo
             progress_callback=progress_update
         )
         tasks[task_id]["status"] = "completed"
+        tasks[task_id]["progress"] = 100
         tasks[task_id]["output_path"] = output_path
         tasks[task_id]["output_url"] = f"/download/{os.path.basename(output_path)}"
         print(f"Task {task_id} completed successfully.")
@@ -80,12 +88,22 @@ async def remove_background(
         task_id = str(uuid.uuid4())
         video_path = os.path.join(UPLOAD_DIR, f"{task_id}_{video.filename}")
         
-        # Check if output_dir is valid, otherwise use default
+        # Check if output file already exists with same settings
         final_output_dir = OUTPUT_DIR
         if output_dir and os.path.isdir(output_dir):
             final_output_dir = output_dir
         
         output_path = os.path.join(final_output_dir, f"out_{task_id}_{video.filename}")
+        
+        # Check if file already exists (skip reprocessing)
+        if os.path.exists(output_path):
+            print(f"Output file already exists: {output_path}")
+            return {
+                "task_id": task_id,
+                "status": "completed",
+                "output_url": f"/download/{os.path.basename(output_path)}",
+                "cached": True
+            }
         
         with open(video_path, "wb") as buffer:
             shutil.copyfileobj(video.file, buffer)
@@ -96,7 +114,7 @@ async def remove_background(
             with open(bg_path, "wb") as buffer:
                 shutil.copyfileobj(background.file, buffer)
 
-        tasks[task_id] = {"status": "processing", "progress": 0}
+        tasks[task_id] = {"status": "processing", "progress": 0, "created_at": datetime.now().isoformat()}
         
         background_tasks.add_task(
             run_processing_task, 
@@ -112,8 +130,15 @@ async def remove_background(
 @app.get("/status/{task_id}")
 async def get_status(task_id: str):
     if task_id not in tasks:
-        return JSONResponse(status_code=404, content={"error": "Task not found"})
-    return tasks[task_id]
+        # Return a default "not found" response that won't cause polling to fail
+        return {
+            "status": "not_found",
+            "progress": 0,
+            "error": "Task not found or expired"
+        }
+    task_data = tasks[task_id]
+    print(f"Status request for {task_id}: progress={task_data.get('progress', 0)}%, status={task_data.get('status', 'unknown')}")
+    return task_data
 
 @app.post("/preview")
 async def preview_frame(

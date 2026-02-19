@@ -72,10 +72,17 @@ export default function Home() {
         if (!response.ok) return;
         
         const data = await response.json();
+        console.log(`Poll response for ${taskId}:`, data);
+        
+        // Stop polling if task not found
+        if (data.status === "not_found") {
+          clearInterval(interval);
+          return;
+        }
         
         setVideoList((prev) =>
           prev.map((v) =>
-            v.id === id ? { ...v, progress: data.progress } : v
+            v.id === id ? { ...v, progress: data.progress || 0 } : v
           )
         );
         
@@ -86,7 +93,8 @@ export default function Home() {
                 ...v, 
                 processedVideoUrl: `http://localhost:8000${data.output_url}`,
                 isProcessing: false,
-                taskId: null
+                taskId: null,
+                progress: 100
               } : v
             )
           );
@@ -107,7 +115,7 @@ export default function Home() {
       } catch (error) {
         console.error("Polling error:", error);
       }
-    }, 1000);
+    }, 500); // Poll every 500ms instead of 1000ms
   };
 
   const handlePreview = async () => {
@@ -151,7 +159,7 @@ export default function Home() {
 
     setVideoList((prev) =>
       prev.map((v) =>
-        v.id === id ? { ...v, isProcessing: true, progress: 0, processedVideoUrl: null } : v
+        v.id === id ? { ...v, isProcessing: true, progress: 1, processedVideoUrl: null } : v
       )
     );
 
@@ -178,12 +186,28 @@ export default function Home() {
       if (!response.ok) throw new Error("Could not start processing");
 
       const data = await response.json();
-      setVideoList((prev) =>
-        prev.map((v) =>
-          v.id === id ? { ...v, taskId: data.task_id } : v
-        )
-      );
-      pollStatus(id, data.task_id);
+      
+      // Check if result was cached
+      if (data.cached) {
+        setVideoList((prev) =>
+          prev.map((v) =>
+            v.id === id ? { 
+              ...v, 
+              processedVideoUrl: `http://localhost:8000${data.output_url}`,
+              isProcessing: false,
+              progress: 100,
+              taskId: null
+            } : v
+          )
+        );
+      } else {
+        setVideoList((prev) =>
+          prev.map((v) =>
+            v.id === id ? { ...v, taskId: data.task_id } : v
+          )
+        );
+        pollStatus(id, data.task_id);
+      }
     } catch (error) {
       console.error("Error:", error);
       setVideoList((prev) =>
