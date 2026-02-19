@@ -4,26 +4,25 @@ import { useState, useCallback } from "react";
 import { useDropzone } from "react-dropzone";
 
 interface FileUploadProps {
-  onFileSelect: (file: File) => void;
+  onFilesSelect: (files: File[]) => void;
   accept: Record<string, string[]>;
   label: string;
 }
 
-export default function FileUpload({ onFileSelect, accept, label }: FileUploadProps) {
-  const [fileName, setFileName] = useState<string | null>(null);
+export default function FileUpload({ onFilesSelect, accept, label }: FileUploadProps) {
+  const [fileCount, setFileCount] = useState<number>(0);
 
   const onDrop = useCallback((acceptedFiles: File[]) => {
     if (acceptedFiles.length > 0) {
-      const file = acceptedFiles[0];
-      setFileName(file.name);
-      onFileSelect(file);
+      setFileCount(prev => prev + acceptedFiles.length);
+      onFilesSelect(acceptedFiles);
     }
-  }, [onFileSelect]);
+  }, [onFilesSelect]);
 
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
     onDrop,
     accept,
-    multiple: false,
+    multiple: true,
   });
 
   return (
@@ -55,10 +54,10 @@ export default function FileUpload({ onFileSelect, accept, label }: FileUploadPr
         </div>
         <div>
           <p className="text-lg font-medium text-gray-200">
-            {fileName || label}
+            {fileCount > 0 ? `${fileCount} video(s) selected` : label}
           </p>
           <p className="text-sm text-gray-400 mt-1">
-            {isDragActive ? "Drop the file here" : "Drag & drop or click to select"}
+            {isDragActive ? "Drop the files here" : "Drag & drop or click to select multiple"}
           </p>
         </div>
       </div>

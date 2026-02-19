@@ -13,34 +13,25 @@ class VideoProcessor:
         l, a, b = cv2.split(img_lab)
         return (l.mean(), l.std()), (a.mean(), a.std()), (b.mean(), b.std())
 
-    def apply_smart_lighting(self, foreground_bgr, background_bgr, strength=0.5):
+    def apply_smart_lighting(self, foreground_bgr, bg_stats, strength=0.5):
         """
-        Matches foreground lighting to background using Lab color space stats.
-        strength: 0.0 (no change) to 1.0 (full match)
+        Matches foreground lighting to background using pre-computed Lab stats.
         """
         if strength <= 0:
             return foreground_bgr
 
         # Convert to Lab
         fg_lab = cv2.cvtColor(foreground_bgr.astype(np.uint8), cv2.COLOR_BGR2LAB).astype(np.float32)
-        bg_lab = cv2.cvtColor(background_bgr.astype(np.uint8), cv2.COLOR_BGR2LAB).astype(np.float32)
-
         fg_stats = self._get_lab_stats(fg_lab)
-        bg_stats = self._get_lab_stats(bg_lab)
 
         res_lab_list = list(cv2.split(fg_lab))
         for i in range(3):
-            # Normalization and scaling
             mu_f, sigma_f = fg_stats[i]
             mu_b, sigma_b = bg_stats[i]
             
-            # Avoid division by zero
             if sigma_f < 1e-4: sigma_f = 1e-4
             
-            # Transfer: (x - mu_f) * (sigma_b / sigma_f) + mu_b
             matched_channel = (res_lab_list[i] - mu_f) * (sigma_b / sigma_f) + mu_b
-            
-            # Blend based on strength
             res_lab_list[i] = matched_channel * strength + res_lab_list[i] * (1 - strength)
 
         res_lab = cv2.merge(res_lab_list)
@@ -65,6 +56,12 @@ class VideoProcessor:
 
         bg_img_f = bg_img.astype(np.float32) / 255.0
         
+        # Precompute BG stats for lighting match
+        bg_stats = None
+        if lighting_strength > 0:
+            bg_lab = cv2.cvtColor(bg_img.astype(np.uint8), cv2.COLOR_BGR2LAB).astype(np.float32)
+            bg_stats = self._get_lab_stats(bg_lab)
+
         # Inference
         self.inference.reset_states()
         alphas, foregrounds = self.inference.process_batch([frame_bgr])[0]
@@ -74,7 +71,7 @@ class VideoProcessor:
         
         if lighting_strength > 0:
             fg_u8 = (foreground_bgr_f * 255).astype(np.uint8)
-            fg_matched = self.apply_smart_lighting(fg_u8, bg_img, strength=lighting_strength)
+            fg_matched = self.apply_smart_lighting(fg_u8, bg_stats, strength=lighting_strength)
             foreground_bgr_f = fg_matched.astype(np.float32) / 255.0
 
         alpha = alphas[:, :, np.newaxis]
@@ -103,11 +100,16 @@ class VideoProcessor:
 
         # Apply Blur if needed
         if blur_radius > 0:
-            # Ensure blur radius is odd
             ksize = int(blur_radius * 2 + 1)
             bg_img = cv2.GaussianBlur(bg_img, (ksize, ksize), 0)
 
         bg_img_f = bg_img.astype(np.float32) / 255.0
+        
+        # Precompute BG stats for lighting match
+        bg_stats = None
+        if lighting_strength > 0:
+            bg_lab = cv2.cvtColor(bg_img.astype(np.uint8), cv2.COLOR_BGR2LAB).astype(np.float32)
+            bg_stats = self._get_lab_stats(bg_lab)
 
         fourcc = cv2.VideoWriter_fourcc(*'mp4v')
         out = cv2.VideoWriter(output_path, fourcc, fps, (width, height))
@@ -123,11 +125,10 @@ class VideoProcessor:
         while True:
             ret, frame = cap.read()
             if not ret:
-                # Process remaining frames in batch
                 if frames_batch:
                     results = self.inference.process_batch(frames_batch)
                     for i, (alpha, foreground) in enumerate(results):
-                        self._write_frame(out, foreground, alpha, bg_img_f, bg_img, lighting_strength)
+                        self._write_frame(out, foreground, alpha, bg_img_f, bg_stats, lighting_strength)
                         processed_count += 1
                         pbar.update(1)
                         if progress_callback:
@@ -139,7 +140,7 @@ class VideoProcessor:
             if len(frames_batch) == batch_size:
                 results = self.inference.process_batch(frames_batch)
                 for i, (alpha, foreground) in enumerate(results):
-                    self._write_frame(out, foreground, alpha, bg_img_f, bg_img, lighting_strength)
+                    self._write_frame(out, foreground, alpha, bg_img_f, bg_stats, lighting_strength)
                     processed_count += 1
                     pbar.update(1)
                     if progress_callback:
@@ -150,18 +151,28 @@ class VideoProcessor:
         out.release()
         pbar.close()
 
-    def _write_frame(self, out, foreground, alpha, bg_img_f, bg_img_orig, lighting_strength):
-        # Convert foreground to BGR
+    def _write_frame(self, out, foreground, alpha, bg_img_f, bg_stats, lighting_strength):
+        # Ensure correct range [0, 1] and shape
+        alpha = np.clip(alpha, 0, 1)
+        foreground = np.clip(foreground, 0, 1)
+        
+        target_h, target_w = bg_img_f.shape[:2]
+        
+        # Resize if model output doesn't match input exactly (unlikely but safe)
+        if alpha.shape[:2] != (target_h, target_w):
+            alpha = cv2.resize(alpha, (target_w, target_h))
+        if foreground.shape[:2] != (target_h, target_w):
+            foreground = cv2.resize(foreground, (target_w, target_h))
+
         foreground_bgr_f = foreground[:, :, ::-1] # RGB to BGR
 
-        # Apply Lighting Match
-        if lighting_strength > 0:
-            # Convert [0, 1] float back to [0, 255] uint8 for color transfer
+        if lighting_strength > 0 and bg_stats is not None:
             fg_u8 = (foreground_bgr_f * 255).astype(np.uint8)
-            fg_matched = self.apply_smart_lighting(fg_u8, bg_img_orig, strength=lighting_strength)
+            fg_matched = self.apply_smart_lighting(fg_u8, bg_stats, strength=lighting_strength)
             foreground_bgr_f = fg_matched.astype(np.float32) / 255.0
 
-        # Composite
         alpha = alpha[:, :, np.newaxis]
         composite = (foreground_bgr_f * alpha + bg_img_f * (1 - alpha))
-        out.write((composite * 255).astype(np.uint8))
+        
+        final_frame = (np.clip(composite, 0, 1) * 255).astype(np.uint8)
+        out.write(final_frame)

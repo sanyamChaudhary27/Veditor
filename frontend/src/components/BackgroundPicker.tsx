@@ -70,7 +70,7 @@ export default function BackgroundPicker({ onBackgroundSelect, onColorSelect }: 
         <FileUpload
           label="Select background image"
           accept={{ "image/*": [".jpg", ".jpeg", ".png"] }}
-          onFileSelect={onBackgroundSelect}
+          onFilesSelect={(files) => onBackgroundSelect(files[0])}
         />
       )}
     </div>
